@@ -1,12 +1,25 @@
 import os
+import json
+import pathlib
 import requests
-from flask import Flask, request, render_template_string, session, redirect, url_for
+from flask import (
+    Flask,
+    request,
+    render_template_string,
+    session,
+    redirect,
+    url_for,
+)
 
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", "splash123!")
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me-please")
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:14b")
+
+BASE_DIR = pathlib.Path(__file__).resolve().parent
+CHAT_DIR = pathlib.Path(os.getenv("CHAT_DIR", BASE_DIR / "chats"))
+CHAT_DIR.mkdir(parents=True, exist_ok=True)
 
 PAGE = """
 <!DOCTYPE html>
@@ -102,11 +115,9 @@ PAGE = """
     }
     .bubble-user {
       background: rgba(0, 85, 170, 0.1);
-      color: inherit;
     }
     .bubble-assistant {
       background: rgba(0, 135, 68, 0.12);
-      color: inherit;
     }
 
     .forms {
@@ -160,7 +171,29 @@ PAGE = """
       }
     }
 
-    /* Mobile-Optimierung */
+    .save-load-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      align-items: center;
+      font-size: 0.8rem;
+    }
+    .save-load-row input[type="text"],
+    .save-load-row select {
+      font-size: 0.8rem;
+      padding: 0.25rem 0.4rem;
+      border-radius: 0.4rem;
+      border: 1px solid var(--border);
+      background: inherit;
+      color: inherit;
+    }
+    @media (prefers-color-scheme: dark) {
+      .save-load-row input[type="text"],
+      .save-load-row select {
+        border-color: var(--border-dark);
+      }
+    }
+
     @media (max-width: 600px) {
       .page { padding: 0.5rem; }
       .card { height: calc(100vh - 5.5rem); }
@@ -176,7 +209,9 @@ PAGE = """
   <div class="page">
     <header>
       <h1>Chat mit lokalem LLM</h1>
-      <div class="subtitle">Modell: {{ model }}</div>
+      <div class="subtitle">
+        Modell: {{ model }}{% if current_chat %} &middot; Chat: {{ current_chat }}{% endif %}
+      </div>
     </header>
 
     <div class="card">
@@ -203,9 +238,26 @@ PAGE = """
           <button type="submit" class="btn-primary">Senden</button>
         </form>
 
-        <form method="post" action="{{ url_for('reset_chat') }}">
-          <button type="submit" class="btn-secondary">Chat zurücksetzen</button>
-        </form>
+        <div class="save-load-row">
+          <form method="post" action="{{ url_for('save_chat_route') }}">
+            <input type="text" name="chat_name" placeholder="Chat-Namen zum Speichern" required>
+            <button type="submit" class="btn-secondary">Speichern</button>
+          </form>
+
+          <form method="post" action="{{ url_for('load_chat_route') }}">
+            <select name="chat_name">
+              <option value="">Chat laden...</option>
+              {% for c in saved_chats %}
+                <option value="{{ c }}" {% if c == current_chat %}selected{% endif %}>{{ c }}</option>
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn-secondary">Laden</button>
+          </form>
+
+          <form method="post" action="{{ url_for('reset_chat') }}">
+            <button type="submit" class="btn-secondary">Neu (leer)</button>
+          </form>
+        </div>
       </div>
     </div>
   </div>
@@ -213,8 +265,62 @@ PAGE = """
 </html>
 """
 
+# ---------- Persistenz-Funktionen ----------
+
+def safe_name(name: str) -> str:
+    """Einfache 'Slug'-Funktion für Dateinamen."""
+    name = name.strip()
+    if not name:
+        return "chat"
+    allowed = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+    cleaned = "".join(ch if ch in allowed else "_" for ch in name)
+    return cleaned or "chat"
+
+def chat_path(chat_name: str) -> pathlib.Path:
+    return CHAT_DIR / f"{safe_name(chat_name)}.json"
+
+def list_saved_chats():
+    chats = []
+    for p in CHAT_DIR.glob("*.json"):
+        chats.append(p.stem)
+    chats.sort()
+    return chats
+
+def save_chat_to_disk(chat_name: str, history):
+    path = chat_path(chat_name)
+    data = {
+        "model": OLLAMA_MODEL,
+        "history": history,
+    }
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_chat_from_disk(chat_name: str):
+    path = chat_path(chat_name)
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+    # Nur history nutzen; Modell kann sich geändert haben
+    return data.get("history", [])
+
+# ---------- Session-Helfer ----------
+
+def get_history():
+    return session.get("history", [])
+
+def save_history(history):
+    session["history"] = history
+
+def get_current_chat_name():
+    return session.get("current_chat_name", "")
+
+def set_current_chat_name(name: str):
+    session["current_chat_name"] = name
+
+# ---------- Ollama-Aufruf ----------
+
 def call_ollama(messages):
-    """Schickt den Chat-Verlauf an Ollama und gibt die Antwort zurück."""
     resp = requests.post(
         f"{OLLAMA_URL}/api/chat",
         json={
@@ -228,11 +334,7 @@ def call_ollama(messages):
     data = resp.json()
     return data["message"]["content"]
 
-def get_history():
-    return session.get("history", [])
-
-def save_history(history):
-    session["history"] = history
+# ---------- Routes ----------
 
 @app.route("/", methods=["GET"])
 def index():
@@ -257,11 +359,35 @@ def chat():
         PAGE,
         messages=history,
         model=OLLAMA_MODEL,
+        saved_chats=list_saved_chats(),
+        current_chat=get_current_chat_name(),
     )
 
 @app.route("/reset", methods=["POST"])
 def reset_chat():
     save_history([])
+    set_current_chat_name("")
+    return redirect(url_for("chat"))
+
+@app.route("/save", methods=["POST"])
+def save_chat_route():
+    chat_name = (request.form.get("chat_name") or "").strip()
+    if not chat_name:
+        return redirect(url_for("chat"))
+    history = get_history()
+    save_chat_to_disk(chat_name, history)
+    set_current_chat_name(safe_name(chat_name))
+    return redirect(url_for("chat"))
+
+@app.route("/load", methods=["POST"])
+def load_chat_route():
+    chat_name = (request.form.get("chat_name") or "").strip()
+    if not chat_name:
+        return redirect(url_for("chat"))
+    loaded = load_chat_from_disk(chat_name)
+    if loaded is not None:
+        save_history(loaded)
+        set_current_chat_name(chat_name)
     return redirect(url_for("chat"))
 
 if __name__ == "__main__":
