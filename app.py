@@ -100,6 +100,9 @@ PAGE = """
       font-size: 0.7rem;
       opacity: 0.8;
       margin-bottom: 0.15rem;
+      display: flex;
+      align-items: center;
+      gap: 0.25rem;
     }
     .label-user { color: var(--user); }
     .label-assistant { color: var(--assistant); }
@@ -118,6 +121,21 @@ PAGE = """
     }
     .bubble-assistant {
       background: rgba(0, 135, 68, 0.12);
+    }
+
+    .tts-button {
+      border-radius: 0.8rem;
+      border: none;
+      padding: 0.15rem 0.5rem;
+      font-size: 0.7rem;
+      cursor: pointer;
+      background: #e0e0e0;
+    }
+    @media (prefers-color-scheme: dark) {
+      .tts-button {
+        background: #333;
+        color: #f5f5f5;
+      }
     }
 
     .forms {
@@ -215,12 +233,22 @@ PAGE = """
     </header>
 
     <div class="card">
-      <div class="chat-box">
+      <div class="chat-box" id="chatBox">
         {% if messages %}
           {% for m in messages %}
             <div class="msg {% if m.role == 'user' %}msg-user{% else %}msg-assistant{% endif %}">
               <div class="label {% if m.role == 'user' %}label-user{% else %}label-assistant{% endif %}">
-                {% if m.role == 'user' %}Du{% else %}LLM{% endif %}
+                {% if m.role == 'user' %}
+                  Du
+                {% else %}
+                  LLM
+                  <button type="button"
+                          class="tts-button"
+                          onclick="speakText(this)"
+                          data-text="{{ m.content | replace('\\n', ' ') }}">
+                    Vorlesen
+                  </button>
+                {% endif %}
               </div>
               <div class="bubble {% if m.role == 'user' %}bubble-user{% else %}bubble-assistant{% endif %}">
                 {{ m.content }}
@@ -261,6 +289,33 @@ PAGE = """
       </div>
     </div>
   </div>
+
+  <script>
+    function speakText(btn) {
+      if (!('speechSynthesis' in window)) {
+        alert('Sprachausgabe wird von diesem Browser nicht unterstützt.');
+        return;
+      }
+      const text = btn.getAttribute('data-text') || '';
+      if (!text.trim()) return;
+
+      // laufende Wiedergabe stoppen
+      window.speechSynthesis.cancel();
+
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = 'de-DE';
+      utter.rate = 1.0;
+      utter.pitch = 1.0;
+
+      window.speechSynthesis.speak(utter);
+    }
+
+    // optional: an letzte Nachricht scrollen
+    const box = document.getElementById('chatBox');
+    if (box) {
+      box.scrollTop = box.scrollHeight;
+    }
+  </script>
 </body>
 </html>
 """

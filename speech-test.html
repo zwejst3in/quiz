@@ -1,0 +1,17 @@
+<!DOCTYPE html>
+<html lang="de">
+<body>
+<button onclick="testSpeak()">Test</button>
+<script>
+function testSpeak() {
+  if (!('speechSynthesis' in window)) {
+    alert('keine speechSynthesis');
+    return;
+  }
+  const u = new SpeechSynthesisUtterance('Hallo, das ist ein Test.');
+  u.lang = 'de-DE';
+  window.speechSynthesis.speak(u);
+}
+</script>
+</body>
+</html>
